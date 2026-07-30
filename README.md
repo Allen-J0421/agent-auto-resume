@@ -34,44 +34,6 @@ workflows that call the Codex or Claude CLI.
 - Stores owner-only runtime state and never reads or copies provider credential files.
 - Has no third-party Python runtime dependencies.
 
-## Quickstart
-
-### 1. Check compatibility
-
-```bash
-./agent-resume doctor
-```
-
-### 2. Run your usual provider CLI through the supervisor
-
-```bash
-# Start an interactive Codex session.
-./agent-resume cli codex
-
-# Start Claude with an initial prompt.
-./agent-resume cli claude "Review this repository and suggest the next task."
-```
-
-### 3. Or supervise an existing agent workflow
-
-```bash
-./agent-resume run -- ./scripts/agent-workflow.sh
-./agent-resume run -- npm run agent-workflow
-```
-
-### 4. Inspect an active or completed run
-
-```bash
-./agent-resume status
-```
-
-Add `--verbose` to `run` or `cli` to print pause, resume, and monitoring
-messages:
-
-```bash
-./agent-resume cli --verbose codex
-```
-
 ## How it works
 
 ```mermaid
@@ -92,9 +54,42 @@ POSIX process group. Private `codex` and `claude` shims are prepended to the
 child's `PATH`; they communicate with the supervisor over a mode-`0600` Unix
 socket. No provider credential file is opened or copied.
 
-## Install
+## Setup
 
-### Run from a clone
+### Recommended: install once with `pipx`
+
+[`pipx`](https://pipx.pypa.io/) installs command-line applications in isolated
+user environments. 
+Available from every project directory without adding a checkout or Python
+dependency to that project.
+
+```bash
+pipx install git+https://github.com/Allen-J0421/agent-auto-resume.git
+agent-resume doctor
+```
+
+If you do not yet have `pipx`, install it using the
+[pipx installation guide](https://pipx.pypa.io/stable/how-to/install-pipx.html), then
+open a new terminal if the guide asks you to update `PATH`.
+
+### Or: install with user Python environment
+
+```bash
+python3 -m pip install --user git+https://github.com/Allen-J0421/agent-auto-resume.git
+agent-resume doctor
+```
+
+If the shell cannot find `agent-resume`, add the user Python scripts directory
+to `PATH`:
+
+```bash
+export PATH="$(python3 -m site --user-base)/bin:$PATH"
+```
+
+### Or: clone the source
+
+Clone the repository when you want to inspect, modify, or contribute to the
+source code:
 
 ```bash
 git clone https://github.com/Allen-J0421/agent-auto-resume.git
@@ -102,11 +97,14 @@ cd agent-auto-resume
 ./agent-resume doctor
 ```
 
-### Install the command globally
+Keep the clone outside the repository you plan to supervise. If you do clone
+it inside another Git repository, add a global ignore rule once so its source
+directory does not appear as untracked work:
 
 ```bash
-python3 -m pip install --user .
-agent-resume doctor
+mkdir -p ~/.config/git
+printf '\nagent-auto-resume/\n' >> ~/.config/git/ignore
+git config --global core.excludesfile ~/.config/git/ignore
 ```
 
 ## Requirements
@@ -117,6 +115,47 @@ agent-resume doctor
 - A ChatGPT-backed Codex or Claude.ai subscription
 
 API-key RPM/TPM and billing limits are intentionally out of scope.
+
+## Quickstart
+
+### 1. Check compatibility
+
+```bash
+agent-resume doctor
+
+# If running directly from a clone without installing:
+# ./agent-resume doctor
+```
+
+### 2. Run your usual provider CLI through the supervisor
+
+```bash
+# Start an interactive Codex session.
+agent-resume cli codex
+
+# Start Claude with an initial prompt.
+agent-resume cli claude "Review this repository and suggest the next task."
+```
+
+### 3. Or supervise an existing agent workflow
+
+```bash
+agent-resume run -- ./scripts/agent-workflow.sh
+agent-resume run -- npm run agent-workflow
+```
+
+### 4. Inspect an active or completed run
+
+```bash
+agent-resume status
+```
+
+Add `--verbose` to `run` or `cli` to print pause, resume, and monitoring
+messages:
+
+```bash
+agent-resume cli --verbose codex
+```
 
 ## Commands
 
