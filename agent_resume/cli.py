@@ -87,6 +87,19 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reset-grace", type=int, default=15)
     parser.add_argument("--no-session-resume", action="store_true")
     parser.add_argument("--retry-idempotent", action="store_true")
+    parser.add_argument(
+        "--interception-grace",
+        type=float,
+        default=120.0,
+        metavar="SECONDS",
+        help="warn if no provider invocation was intercepted after this long",
+    )
+    parser.add_argument(
+        "--require-interception",
+        action="store_true",
+        help="exit 75 instead of continuing when the grace period passes "
+        "without an intercepted provider invocation",
+    )
     parser.add_argument("--verbose", action="store_true")
 
 
@@ -100,6 +113,8 @@ def _supervise(
         raise SystemExit("agent-resume: --threshold must be between 0 and 100")
     if arguments.reset_grace < 0:
         raise SystemExit("agent-resume: --reset-grace cannot be negative")
+    if arguments.interception_grace < 0:
+        raise SystemExit("agent-resume: --interception-grace cannot be negative")
     if os.name != "posix" or not sys.platform.startswith(("darwin", "linux")):
         raise SystemExit("agent-resume: only macOS and Linux are supported")
     provider_mode = arguments.provider
@@ -115,6 +130,8 @@ def _supervise(
         retry_idempotent=arguments.retry_idempotent,
         verbose=arguments.verbose,
         direct_provider=direct_provider,
+        interception_grace=arguments.interception_grace,
+        require_interception=arguments.require_interception,
     )
     try:
         return supervisor.run()
@@ -149,6 +166,17 @@ def _status(as_json: bool) -> int:
     print("{} · {} · provider {}".format(public["run_id"], public["state"], provider))
     if public["child_pid"]:
         print("child pid: {}".format(public["child_pid"]))
+    if public.get("interception") == "none":
+        print(
+            "interception: none — no provider invocation was intercepted; "
+            "the workload was not protected"
+        )
+    elif public.get("interception_missing"):
+        print(
+            "interception: partial — never observed: {}".format(
+                ", ".join(public["interception_missing"])
+            )
+        )
     for window in public["windows"]:
         reset = window.get("resets_at")
         reset_text = (
@@ -175,6 +203,8 @@ def _public_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "windows": state.get("windows", []),
         "child_pid": state.get("child_pid"),
         "session_id": state.get("session_id"),
+        "interception": state.get("interception"),
+        "interception_missing": state.get("interception_missing", []),
     }
 
 

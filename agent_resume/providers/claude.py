@@ -117,6 +117,16 @@ def is_session_invocation(args: Sequence[str]) -> bool:
     return positional not in CLAUDE_SUBCOMMANDS
 
 
+def is_stream_json_invocation(args: Sequence[str]) -> bool:
+    """Detect SDK-driven sessions whose prompt and protocol state live on stdin."""
+    for index, arg in enumerate(args):
+        if arg == "--input-format" and index + 1 < len(args):
+            return args[index + 1] == "stream-json"
+        if arg.startswith("--input-format="):
+            return arg.split("=", 1)[1] == "stream-json"
+    return False
+
+
 def make_resume_args(
     original_args: Sequence[str],
     session_id: str,

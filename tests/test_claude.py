@@ -5,6 +5,7 @@ from pathlib import Path
 from agent_resume.providers.claude import (
     augment_args,
     is_session_invocation,
+    is_stream_json_invocation,
     make_resume_args,
     window_from_rate_event,
     windows_from_status_payload,
@@ -51,6 +52,17 @@ class ClaudeTests(unittest.TestCase):
         self.assertTrue(is_session_invocation(["-p", "hello"]))
         augmented = augment_args(["-p", "hello"], "/s", "/p")
         self.assertEqual(augmented[-4:], ["--settings", "/s", "--plugin-dir", "/p"])
+
+    def test_stream_json_invocations_are_detected(self):
+        self.assertTrue(
+            is_stream_json_invocation(["--input-format", "stream-json", "-p"])
+        )
+        self.assertTrue(is_stream_json_invocation(["--input-format=stream-json"]))
+        self.assertFalse(is_stream_json_invocation(["-p", "hello"]))
+        self.assertFalse(
+            is_stream_json_invocation(["--output-format", "stream-json"])
+        )
+        self.assertFalse(is_stream_json_invocation(["--input-format", "text"]))
 
     def test_resume_replaces_prompt_and_keeps_print_mode(self):
         args = make_resume_args(

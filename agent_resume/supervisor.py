@@ -55,6 +55,8 @@ class Supervisor:
         verbose: bool = False,
         direct_provider: Optional[str] = None,
         executable_path: Optional[str] = None,
+        interception_grace: float = 120.0,
+        require_interception: bool = False,
     ) -> None:
         """Prepare isolated IPC, provider integrations, and initial public state."""
         if not command:
@@ -69,6 +71,8 @@ class Supervisor:
         self.verbose = verbose
         self.direct_provider = direct_provider
         self.executable_path = executable_path
+        self.interception_grace = interception_grace
+        self.require_interception = require_interception
 
         prune_old_runs()
         self.run_dir = create_run_dir()
@@ -93,6 +97,10 @@ class Supervisor:
         }
         self.windows: Dict[str, List[QuotaWindow]] = {"codex": [], "claude": []}
         self.capabilities: Dict[str, str] = {}
+        self.intercepted: Dict[str, int] = {"codex": 0, "claude": 0}
+        self.interception_checked = False
+        self.interception_abort = False
+        self.child_started_at: Optional[float] = None
         self.active_provider: Optional[str] = direct_provider
         self.session_ids: Dict[str, Optional[str]] = {"codex": None, "claude": None}
         self.last_failure: Dict[str, Dict[str, Any]] = {}
@@ -135,6 +143,7 @@ class Supervisor:
             and os.isatty(sys.stdout.fileno())
             and os.isatty(sys.stderr.fileno())
         )
+        exit_warning: List[str] = []
         try:
             self._install_signal_handlers()
             self._start_child(environment, use_pty)
@@ -142,6 +151,10 @@ class Supervisor:
             if self.direct_provider == "codex":
                 self._start_codex_monitor()
             return_code = self._event_loop()
+            if self.interception_abort:
+                return_code = 75
+            else:
+                exit_warning = self._missing_interception()
             if return_code == 0:
                 self.state = STATE_COMPLETED
             else:
@@ -150,6 +163,8 @@ class Supervisor:
             return return_code
         finally:
             self._cleanup()
+            if exit_warning:
+                self._warn_missing_interception(exit_warning, at_exit=True)
 
     def _start_server(self) -> None:
         """Open the owner-only Unix socket used by child-provider shims."""
@@ -209,6 +224,11 @@ class Supervisor:
         for provider, path in self.real_binaries.items():
             if path:
                 environment["AGENT_RESUME_REAL_{}".format(provider.upper())] = path
+            # Published so launchers that resolve their own CLI (Claude Agent SDK
+            # cli_path, npx wrappers) can opt in without relying on PATH order.
+            environment["AGENT_RESUME_SHIM_{}".format(provider.upper())] = str(
+                self.shim_dir / provider
+            )
         return environment
 
     def _start_child(self, environment: Dict[str, str], use_pty: bool) -> None:
@@ -243,6 +263,7 @@ class Supervisor:
                 start_new_session=True,
             )
         self.child_pgid = self.child.pid
+        self.child_started_at = time.time()
         self._write_state()
 
     def _start_watchdog(self) -> None:
@@ -291,6 +312,7 @@ class Supervisor:
         while True:
             self._drain_monitor_events()
             self._maybe_resume()
+            self._check_interception()
             if self.child.poll() is not None:
                 self._drain_pty()
                 return_code = int(self.child.returncode or 0)
@@ -358,6 +380,10 @@ class Supervisor:
     def _handle_request(self, message: Dict[str, Any]) -> Dict[str, Any]:
         request_type = message.get("type")
         provider = str(message.get("provider") or "")
+        if request_type in ("gate", "event", "result") and self._provider_enabled(
+            provider
+        ):
+            self.intercepted[provider] = self.intercepted.get(provider, 0) + 1
         if request_type == "gate":
             return self._handle_gate(provider)
         if request_type == "event":
@@ -686,6 +712,92 @@ class Supervisor:
             return False
         return self.provider_mode in ("auto", "both", provider)
 
+    def _missing_interception(self) -> List[str]:
+        """List selected providers for which no shim request was ever observed."""
+        if self.provider_mode == "auto":
+            # No provider was named, so any observed provider proves attachment.
+            selected = ["codex", "claude"]
+            if any(self.intercepted.get(provider, 0) for provider in selected):
+                return []
+            return selected
+        if self.provider_mode == "both":
+            selected = ["codex", "claude"]
+        else:
+            selected = [self.provider_mode]
+        return [
+            provider for provider in selected if not self.intercepted.get(provider, 0)
+        ]
+
+    def _interception_summary(self) -> Tuple[str, List[str], Dict[str, int]]:
+        """Summarize interception coverage for machine-readable state."""
+        observed = {
+            provider: count
+            for provider, count in self.intercepted.items()
+            if self._provider_enabled(provider)
+        }
+        missing = self._missing_interception()
+        if not any(observed.values()):
+            return "none", missing, observed
+        return ("partial" if missing else "observed"), missing, observed
+
+    def _check_interception(self) -> None:
+        """Warn once (or abort) when the grace period passes with zero interception."""
+        if self.interception_checked or self.child_started_at is None:
+            return
+        if time.time() - self.child_started_at < self.interception_grace:
+            return
+        self.interception_checked = True
+        missing = self._missing_interception()
+        if not missing:
+            return
+        self._warn_missing_interception(missing, at_exit=False)
+        if not self.require_interception:
+            return
+        self._alert(
+            "--require-interception is set; stopping the unprotected workload"
+            " (exit 75)"
+        )
+        self.interception_abort = True
+        if self.child_pgid is None:
+            return
+        if self.paused:
+            try:
+                os.killpg(self.child_pgid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+            self.paused = False
+        try:
+            os.killpg(self.child_pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+    def _warn_missing_interception(self, missing: List[str], at_exit: bool) -> None:
+        """State plainly that the guard never attached, and why that happens."""
+        names = " or ".join(missing)
+        if at_exit:
+            headline = (
+                "WARNING: no {} invocation was ever intercepted. The workload was"
+                " NOT protected against usage-limit interruptions.".format(names)
+            )
+        else:
+            headline = (
+                "WARNING: no {} invocation has been intercepted after {:.0f}s. If"
+                " this workload calls {}, it is NOT protected.".format(
+                    names, self.interception_grace, names
+                )
+            )
+        shim_vars = " / ".join(
+            "$AGENT_RESUME_SHIM_{}".format(provider.upper()) for provider in missing
+        )
+        self._alert(headline)
+        self._alert(
+            "Common causes: the program starts the CLI by absolute path (Claude"
+            " Agent SDK bundled CLI, ~/.claude/local, npx, a shell alias) instead"
+            " of resolving it from PATH. Launchers that accept an explicit CLI"
+            " path can use {}. Run `agent-resume doctor` for the interception"
+            " boundaries.".format(shim_vars)
+        )
+
     def _respond_and_close(
         self, connection: socket.socket, response: Dict[str, Any]
     ) -> None:
@@ -844,14 +956,21 @@ class Supervisor:
             "capabilities": self.capabilities,
             "updated_at": time.time(),
         }
+        interception, missing, observed = self._interception_summary()
+        state["interception"] = interception
+        state["interception_missing"] = missing
+        state["interception_requests"] = observed
         if exit_code is not None:
             state["exit_code"] = exit_code
         atomic_write_json(self.state_path, state)
 
+    def _alert(self, message: str) -> None:
+        sys.stderr.write("[agent-resume] {}\n".format(message))
+        sys.stderr.flush()
+
     def _log(self, message: str) -> None:
         if self.verbose:
-            sys.stderr.write("[agent-resume] {}\n".format(message))
-            sys.stderr.flush()
+            self._alert(message)
 
     def _cleanup(self) -> None:
         """Restore terminal/process state and tear down transient supervisor resources."""

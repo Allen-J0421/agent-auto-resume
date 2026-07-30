@@ -6,7 +6,11 @@ import sys
 from typing import Dict, List, Sequence
 
 from agent_resume.protocol import request
-from agent_resume.providers.claude import augment_args, make_resume_args
+from agent_resume.providers.claude import (
+    augment_args,
+    is_stream_json_invocation,
+    make_resume_args,
+)
 from agent_resume.telemetry import StructuredTelemetry, uses_structured_stdout
 
 
@@ -32,6 +36,10 @@ def run(provider: str, args: Sequence[str]) -> int:
     original_args = list(args)
     current_args = _prepare_args(provider, original_args)
     recovery_count = 0
+    # A stream-json session's prompt arrives over stdin and its caller (the
+    # Claude Agent SDK) holds protocol state a re-exec would desync, so the only
+    # safe recovery is the supervisor's pause-until-reset of the process group.
+    stream_json = provider == "claude" and is_stream_json_invocation(original_args)
     while True:
         gate = _request(
             socket_path,
@@ -67,6 +75,12 @@ def run(provider: str, args: Sequence[str]) -> int:
             },
         )
         action = result.get("action", "exit")
+        if stream_json and action in ("resume_session", "retry"):
+            sys.stderr.write(
+                "agent-resume: a stream-json claude session cannot be re-executed"
+                " safely; recovery is limited to pause-until-reset\n"
+            )
+            return return_code
         if action == "resume_session":
             session_id = result.get("session_id")
             if not isinstance(session_id, str) or not session_id:

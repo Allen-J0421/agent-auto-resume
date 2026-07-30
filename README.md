@@ -212,8 +212,9 @@ agent-resume status [--json]
 ```
 
 Shows the latest run started from the current directory: state, detected
-provider, child process ID, session ID, and observed quota windows. States are
-`running`, `pause_pending`, `waiting`, `verifying`, `failed`, and `completed`.
+provider, child process ID, session ID, interception coverage, and observed
+quota windows. States are `running`, `pause_pending`, `waiting`, `verifying`,
+`failed`, and `completed`.
 
 ### Common options
 
@@ -224,6 +225,8 @@ provider, child process ID, session ID, and observed quota windows. States are
 | `--reset-grace SECONDS` | Extra time to wait after a provider's reported reset. Default: `15`. |
 | `--no-session-resume` | Do not attempt native provider session recovery after a quota failure. |
 | `--retry-idempotent` | Permit one retry when session recovery is unavailable. Use only for calls that are safe to repeat. |
+| `--interception-grace SECONDS` | Warn once when no guarded provider invocation has been intercepted after this long. Default: `120`. |
+| `--require-interception` | Exit with code `75` instead of continuing when the grace period passes without an intercepted invocation. |
 | `--verbose` | Print pause, resume, and monitoring-degradation messages. |
 
 Agent Auto Resume options belong before `--` in `run` mode and before the
@@ -248,8 +251,10 @@ Agent Auto Resume selects the safest available continuation in this order:
 3. Replay one intercepted invocation only with `--retry-idempotent`.
 4. Exit with code `75` when no safe continuation exists.
 
-The wrapped command's normal exit code is preserved. Agent Auto Resume never
-replays the top-level workflow.
+Stream-json (Agent SDK-driven) Claude sessions are never re-executed, because
+the calling SDK holds protocol state a re-exec would desync; only path 1
+applies to them. The wrapped command's normal exit code is preserved. Agent
+Auto Resume never replays the top-level workflow.
 
 ## Limitations
 

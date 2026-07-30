@@ -79,6 +79,10 @@ def run_doctor(timeout: float = 8.0) -> Dict[str, Any]:
         "checks": checks,
         "limitations": [
             "absolute provider paths, SDK/API calls, remote processes, and replaced PATH values bypass interception",
+            "only `claude`/`codex` resolved from PATH is intercepted; absolute paths (~/.claude/local/claude), shell aliases, npx, and direct node cli.js invocations are not",
+            "the Claude Agent SDK prefers its bundled CLI over PATH; pass ClaudeAgentOptions(cli_path=os.environ['AGENT_RESUME_SHIM_CLAUDE']) inside a supervised run to opt in",
+            "stream-json (SDK-driven) Claude sessions recover only by pause-until-reset, never --resume re-execution",
+            "a run that never intercepts its selected provider warns at exit; use --require-interception to fail fast instead",
             "pre-limit stopping is best effort because providers report usage after work",
             "Claude managed policy may disable temporary hooks or status-line telemetry",
         ],
